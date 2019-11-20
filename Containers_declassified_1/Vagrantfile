@@ -1,0 +1,54 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+$script = <<SCRIPT
+(
+# Install necessary packages
+sudo apt-get update
+sudo apt-get install -y curl tree cgroup-tools
+
+# Prepare network
+sudo echo 1 > /proc/sys/net/ipv4/ip_forward
+sudo iptables --flush
+sudo iptables -t nat -A POSTROUTING -o bridge0 -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -o enp0s3 -j MASQUERADE
+
+sudo ip link add bridge0 type bridge
+sudo ip addr add 192.168.0.1/24 dev bridge0
+sudo ip link set bridge0 up
+
+# Prepare disk for COW FS
+echo 'type=83' | sudo sfdisk /dev/sdc
+sudo mkfs.xfs -n ftype=1 /dev/sdc1
+sudo mkdir /mnt/cow
+sudo echo '/dev/sdc1 /mnt/cow/ xfs defaults 0 0' >> /etc/fstab
+sudo mount /mnt/cow
+
+) 2>&1
+SCRIPT
+
+Vagrant.configure("2") do |config|
+	config.vm.box = "ubuntu/eoan64"
+	config.vm.hostname = "workshop"
+	config.vm.box_check_update = true
+	config.vm.boot_timeout = 600
+	config.vm.synced_folder ".", "/vagrant", disabled: true
+
+	config.vm.provider "virtualbox" do |vb|
+		vb.gui = false
+		vb.name = "workshop"
+		vb.cpus = 2
+		vb.memory = 2048
+		
+		file_to_disk = Dir.pwd + "/cow.vdi"
+		unless File.exist?(file_to_disk)
+			vb.customize ['createmedium', 'disk', '--filename',  file_to_disk, '--format', 'vdi', '--size', 4096]
+		end
+		vb.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', '3', '--device', '0', '--type', 'hdd', '--medium', file_to_disk]
+	end
+
+	config.vm.provision "file", source: "./alpine.tar", destination: "/tmp/alpine.tar"
+  
+	config.vm.provision 'shell', inline: $script
+end
+
